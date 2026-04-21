@@ -1,0 +1,29 @@
+2026-04-21 20:53:02,524 [INFO] OmniStream: main: application starting
+2026-04-21 20:53:02,559 [DEBUG] OmniStream: main: stylesheet loaded from /home/phaylali/Documents/Apps/OmniStreamStudioPy/style.qss
+2026-04-21 20:53:02,560 [INFO] OmniStream: ============================================================
+2026-04-21 20:53:02,560 [INFO] OmniStream: MainWindow.__init__: starting OmniStream Studio
+2026-04-21 20:53:02,560 [INFO] OmniStream: ============================================================
+2026-04-21 20:53:02,560 [DEBUG] OmniStream: ConfigManager._load: path=/home/phaylali/Documents/Apps/OmniStreamStudioPy/data.json
+2026-04-21 20:53:02,562 [INFO] OmniStream: ConfigManager._load: loaded 11 keys from existing file
+2026-04-21 20:53:02,562 [DEBUG] OmniStream: MainWindow.setup_ui
+2026-04-21 20:53:02,562 [INFO] OmniStream: DrawingCanvas.__init__: native resolution 1920x1080
+2026-04-21 20:53:02,651 [DEBUG] OmniStream: MainWindow.setup_ui: UI built
+2026-04-21 20:53:02,652 [DEBUG] OmniStream: MainWindow.load_config
+2026-04-21 20:53:02,652 [DEBUG] OmniStream: ConfigManager.get: key='resolution' -> '1920x1080 (1080p)'
+2026-04-21 20:53:02,652 [INFO] OmniStream: MainWindow.change_resolution: 1920x1080 (1080p)
+2026-04-21 20:53:02,659 [INFO] OmniStream: MainWindow.change_resolution: canvas now 1920x1080
+2026-04-21 20:53:02,660 [DEBUG] OmniStream: ConfigManager.get: key='bg_color' -> [30, 30, 30]
+2026-04-21 20:53:02,660 [DEBUG] OmniStream: ConfigManager.get: key='brush_color' -> [255, 255, 255]
+2026-04-21 20:53:02,661 [DEBUG] OmniStream: ConfigManager.get: key='brush_size' -> 5
+2026-04-21 20:53:02,661 [DEBUG] OmniStream: ConfigManager.get: key='encoder' -> 'VAAPI (AMD GPU)'
+2026-04-21 20:53:02,661 [DEBUG] OmniStream: ConfigManager.get: key='platform' -> 'Twitch'
+2026-04-21 20:53:02,661 [DEBUG] OmniStream: ConfigManager.get: key='rtmp_url' -> 'rtmp://ingest.global-contribute.live-video.net/app'
+2026-04-21 20:53:02,661 [DEBUG] OmniStream: ConfigManager.get: key='stream_key' -> ***
+2026-04-21 20:53:02,661 [DEBUG] OmniStream: ConfigManager.get: key='bitrate' -> 4000
+2026-04-21 20:53:02,661 [DEBUG] OmniStream: ConfigManager.get: key='fps' -> '30'
+2026-04-21 20:53:02,661 [DEBUG] OmniStream: ConfigManager.get: key='bg_image_path' -> '/home/phaylali/Documents/Apps/OmniStreamStudioPy/assets/background.webp'
+2026-04-21 20:53:02,661 [INFO] OmniStream: DrawingCanvas.set_background_image: /home/phaylali/Documents/Apps/OmniStreamStudioPy/assets/background.webp
+2026-04-21 20:53:02,696 [DEBUG] OmniStream: ConfigManager.get: key='bitrate' -> 4000
+2026-04-21 20:53:02,696 [INFO] OmniStream: MainWindow.load_config: loaded resolution=1920x1080 (1080p) encoder=VAAPI (AMD GPU) platform=Twitch bitrate=4000 fps=30
+2026-04-21 20:53:02,696 [DEBUG] OmniStream: MainWindow.connect_signals
+2026-04-21 20:53:02,747 [INFO] OmniStream: main: main window shown, entering event loop

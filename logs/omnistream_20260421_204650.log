@@ -1,3 +1,0 @@
-2026-04-21 20:46:50,939 [INFO] OmniStream: DrawingCanvas.__init__: native resolution 1920x1080
-2026-04-21 20:46:51,018 [INFO] OmniStream: DrawingCanvas.set_background_image: /tmp/test_bg.png
-2026-04-21 20:46:51,027 [DEBUG] OmniStream: DrawingCanvas.remove_background_image

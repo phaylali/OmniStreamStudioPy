@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OmniStream Test</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: Arial, sans-serif;
+}
+.container {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+}
+@keyframes pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.1); opacity: 0.8; }
+}
+@keyframes rotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+@keyframes bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-30px); }
+}
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.ball {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  animation: bounce 1s ease-in-out infinite;
+}
+.ball1 { background: #e94560; animation-delay: 0s; }
+.ball2 { background: #0f3460; animation-delay: 0.2s; }
+.ball3 { background: #ffd700; animation-delay: 0.4s; }
+.ring {
+  width: 120px;
+  height: 120px;
+  border: 8px solid rgba(233, 69, 96, 0.4);
+  border-radius: 50%;
+  border-top-color: #e94560;
+  animation: rotate 2s linear infinite;
+}
+.counter-box {
+  display: flex;
+  gap: 40px;
+  margin-top: 20px;
+}
+.counter {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: rgba(255,255,255,0.05);
+  border-radius: 12px;
+  padding: 16px 24px;
+  min-width: 120px;
+}
+.counter-num {
+  font-size: 48px;
+  font-weight: bold;
+  color: #fff;
+}
+.counter-label {
+  font-size: 12px;
+  color: #a0a0c0;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+}
+.sparkle {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  background: #ffd700;
+  border-radius: 50%;
+  animation: pulse 2s ease-in-out infinite;
+  pointer-events: none;
+}
+.sparkle:nth-child(1) { top: 10%; left: 15%; animation-delay: 0s; }
+.sparkle:nth-child(2) { top: 20%; left: 75%; animation-delay: 0.3s; }
+.sparkle:nth-child(3) { top: 70%; left: 25%; animation-delay: 0.6s; }
+.sparkle:nth-child(4) { top: 85%; left: 80%; animation-delay: 0.9s; }
+.sparkle:nth-child(5) { top: 50%; left: 5%; animation-delay: 1.2s; }
+.shimmer-bar {
+  width: 300px;
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, transparent, #e94560, #ffd700, transparent);
+  background-size: 200% 100%;
+  animation: shimmer 2s linear infinite;
+}
+.status {
+  font-size: 14px;
+  color: #a0a0c0;
+  animation: pulse 2s ease-in-out infinite;
+}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="sparkle"></div>
+  <div class="sparkle"></div>
+  <div class="sparkle"></div>
+  <div class="sparkle"></div>
+  <div class="sparkle"></div>
+
+  <div class="ring"></div>
+
+  <div style="display:flex; gap:16px;">
+    <div class="ball ball1"></div>
+    <div class="ball ball2"></div>
+    <div class="ball ball3"></div>
+  </div>
+
+  <div class="shimmer-bar"></div>
+
+  <div class="counter-box">
+    <div class="counter">
+      <div class="counter-num" id="views">0</div>
+      <div class="counter-label">Views</div>
+    </div>
+    <div class="counter">
+      <div class="counter-num" id="likes">0</div>
+      <div class="counter-label">Likes</div>
+    </div>
+    <div class="counter">
+      <div class="counter-num" id="subs">0</div>
+      <div class="counter-label">Subs</div>
+    </div>
+  </div>
+
+  <div class="status" id="status">● LIVE</div>
+</div>
+
+<script>
+let views = 1240;
+let likes = 892;
+let subs = 347;
+const speed = { views: 3, likes: 2, subs: 1 };
+
+function updateCounter(id, value, spd) {
+  const el = document.getElementById(id);
+  el.textContent = (value + spd).toLocaleString();
+  el.style.animation = 'none';
+  el.offsetHeight;
+  el.style.animation = 'fadeInUp 0.3s ease-out';
+}
+
+setInterval(() => {
+  views += speed.views;
+  updateCounter('views', views, 0);
+}, 1000);
+
+setInterval(() => {
+  likes += speed.likes;
+  updateCounter('likes', likes, 0);
+}, 1500);
+
+setInterval(() => {
+  subs += speed.subs;
+  updateCounter('subs', subs, 0);
+}, 2000);
+
+const statusEl = document.getElementById('status');
+let dotCount = 0;
+setInterval(() => {
+  dotCount = (dotCount + 1) % 4;
+  statusEl.textContent = '● LIVE' + '.'.repeat(dotCount);
+}, 500);
+</script>
+</body>
+</html>

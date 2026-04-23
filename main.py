@@ -5,17 +5,23 @@ import subprocess
 import threading
 import time
 import logging
+import ctypes
 from datetime import datetime
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QLabel, QSlider, QColorDialog,
                              QFileDialog, QFrame, QComboBox, QLineEdit, QGroupBox,
                              QSplitter, QSizePolicy, QSpinBox, QCheckBox, QScrollArea,
                              QMessageBox, QFormLayout, QTextEdit, QTabWidget,
-                             QListWidget, QInputDialog)
-from PyQt5.QtCore import Qt, QTimer, QPoint, QRect, pyqtSignal, QThread, QSize, QIODevice, QEventLoop
-from PyQt5.QtGui import (QPainter, QPen, QColor, QImage, QPixmap, QFont, 
-                         QBrush, QMouseEvent, QDragEnterEvent, QDropEvent,
-                         QTransform, QFontMetrics, QTextCursor)
+                             QListWidget, QInputDialog, QGraphicsScene, QGraphicsView)
+from PyQt6.QtGui import (QPainter, QPen, QColor, QImage, QPixmap, QFont, 
+                           QBrush, QTransform, QFontMetrics, QTextCursor,
+                           QUndoStack, QUndoCommand, QDragEnterEvent, QDropEvent)
+from PyQt6.QtWebEngineWidgets import QWebEngineView
+from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
+from PyQt6.QtCore import QUrl
+from PyQt6.QtCore import Qt, QTimer, QPoint, QRect, pyqtSignal, QThread, QSize, QIODevice, QEventLoop
+from PyQt6.QtGui import (QPainter, QPen, QColor, QImage, QPixmap, QFont, 
+                           QBrush, QTransform, QFontMetrics, QTextCursor)
 
 LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -43,6 +49,108 @@ DEFAULT_CONFIG = {
     "bitrate": 4000,
     "fps": "30"
 }
+
+
+class AddImageCommand(QUndoCommand):
+    def __init__(self, canvas, file_path, image=None, parent=None):
+        super().__init__(parent)
+        self.canvas = canvas
+        self.file_path = file_path
+        self._image = image
+        self.setText(f"Add image {os.path.basename(file_path)}")
+
+    def redo(self):
+        if self._image and self._image not in self.canvas.images:
+            self.canvas.images.append(self._image)
+            self.canvas.update()
+
+    def undo(self):
+        if self._image in self.canvas.images:
+            self.canvas.images.remove(self._image)
+            self.canvas.update()
+
+
+class RemoveImageCommand(QUndoCommand):
+    def __init__(self, canvas, image):
+        super().__init__()
+        self.canvas = canvas
+        self.image = image
+        self.file_path = getattr(image, '_source_path', '')
+        self.x = image.x
+        self.y = image.y
+        self.scale = image.scale
+        self.setText(f"Remove image {os.path.basename(self.file_path)}")
+
+    def redo(self):
+        if self.image in self.canvas.images:
+            self.canvas.images.remove(self.image)
+            self.canvas.update()
+
+    def undo(self):
+        if self.image not in self.canvas.images:
+            self.canvas.images.append(self.image)
+            self.canvas.update()
+
+
+class MoveItemCommand(QUndoCommand):
+    def __init__(self, item, old_x, old_y, new_x, new_y):
+        super().__init__()
+        self.item = item
+        self.old_x = old_x
+        self.old_y = old_y
+        self.new_x = new_x
+        self.new_y = new_y
+        self.setText("Move item")
+
+    def redo(self):
+        self.item.x = self.new_x
+        self.item.y = self.new_y
+
+    def undo(self):
+        self.item.x = self.old_x
+        self.item.y = self.old_y
+
+
+class AddTextCommand(QUndoCommand):
+    def __init__(self, canvas, text, font_family, font_size, color, txt_obj=None):
+        super().__init__()
+        self.canvas = canvas
+        self.text = text
+        self.font_family = font_family
+        self.font_size = font_size
+        self.color = color
+        self._txt_obj = txt_obj
+        self.setText(f"Add text '{text[:20]}...'")
+
+    def redo(self):
+        if self._txt_obj and self._txt_obj not in self.canvas.texts:
+            self.canvas.texts.append(self._txt_obj)
+            self.canvas.update()
+
+    def undo(self):
+        if self._txt_obj in self.canvas.texts:
+            self.canvas.texts.remove(self._txt_obj)
+            self.canvas.update()
+
+
+class DrawStrokeCommand(QUndoCommand):
+    def __init__(self, canvas, old_image):
+        super().__init__()
+        self.canvas = canvas
+        self.old_image = old_image.copy()
+        self.setText("Draw stroke")
+
+    def redo(self):
+        self.canvas.update()
+
+    def undo(self):
+        try:
+            if self.old_image and not self.old_image.isNull():
+                self.canvas.image = self.old_image.copy()
+                self.canvas.update()
+        except Exception as e:
+            logger.error("DrawStrokeCommand.undo failed: %s", e)
+
 
 class ConfigManager:
     def __init__(self, path=None):
@@ -115,7 +223,7 @@ class LogHandler(logging.Handler):
     def emit(self, record):
         msg = self.format(record)
         cursor = self.text_edit.textCursor()
-        cursor.movePosition(QTextCursor.End)
+        cursor.movePosition(QTextCursor.MoveOperation.End)
         cursor.insertText(msg + "\n")
         self.text_edit.setTextCursor(cursor)
         self.text_edit.ensureCursorVisible()
@@ -373,18 +481,18 @@ class DraggableImage:
         width, height = self.get_scaled_size()
         scaled = self.original_pixmap.scaled(
             width, height,
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation
         )
         painter.drawPixmap(self.x, self.y, scaled)
 
         if self.selected:
             rect = self.get_rect()
-            painter.setPen(QPen(QColor(0, 120, 215), 2, Qt.SolidLine))
+            painter.setPen(QPen(QColor(0, 120, 215), 2, Qt.PenStyle.SolidLine))
             painter.drawRect(rect)
 
             handles = self.get_handle_rects()
-            painter.setPen(QPen(QColor(255, 255, 255), 2, Qt.SolidLine))
+            painter.setPen(QPen(QColor(255, 255, 255), 2, Qt.PenStyle.SolidLine))
             for name, hrect in handles.items():
                 if name in ('tl', 'br'):
                     painter.setBrush(QBrush(QColor(0, 120, 215)))
@@ -425,7 +533,7 @@ class DraggableText:
         font.setBold(True)
         painter.setFont(font)
 
-        painter.setPen(QPen(QColor(0, 0, 0), max(2, self.font_size // 15), Qt.SolidLine))
+        painter.setPen(QPen(QColor(0, 0, 0), max(2, self.font_size // 15), Qt.PenStyle.SolidLine))
         for dx, dy in [(-2, -2), (2, -2), (-2, 2), (2, 2), (0, -2), (0, 2), (-2, 0), (2, 0)]:
             painter.drawText(self.x + dx, self.y + dy, self.text)
 
@@ -434,7 +542,7 @@ class DraggableText:
 
         if self.selected:
             rect = self.get_rect(painter)
-            painter.setPen(QPen(QColor(0, 120, 215), 2, Qt.DashLine))
+            painter.setPen(QPen(QColor(0, 120, 215), 2, Qt.PenStyle.DashLine))
             painter.drawRect(rect)
 
 class DrawingCanvas(QWidget):
@@ -447,21 +555,14 @@ class DrawingCanvas(QWidget):
         logger.info("DrawingCanvas.__init__: native resolution %dx%d", width, height)
 
         self.setMinimumSize(640, 360)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setAcceptDrops(True)
         self.setMouseTracking(True)
 
-        self.bg_color = QColor(30, 30, 30)
-        self.bg_image = None
-        self.bg_image_path = None
         self.drawing = False
-        self.brush_color = QColor(255, 255, 255)
-        self.brush_size = 5
-        self.eraser = False
-
         self.last_point = QPoint()
-        self.image = QImage(self.native_width, self.native_height, QImage.Format_ARGB32)
-        self.image.fill(self.bg_color.rgb())
+        self.image = QImage(self.native_width, self.native_height, QImage.Format.Format_ARGB32)
+        self.image.fill(QColor(0, 0, 0, 0))
 
         self.images = []
         self.texts = []
@@ -469,11 +570,11 @@ class DrawingCanvas(QWidget):
         self.selected_item = None
         self.scale_factor = 1.0
 
-        self._undo_stack = []
-        self._redo_stack = []
-        self._max_undo = 50
-        self._action_in_progress = False
-        self._save_state()
+        self.undo_stack = QUndoStack(self)
+        self.undo_stack.cleanChanged.connect(self._on_stack_changed)
+
+    def _on_stack_changed(self, clean):
+        self.update()
 
     def get_display_scale(self):
         avail_width = self.width()
@@ -492,7 +593,7 @@ class DrawingCanvas(QWidget):
 
     def clear_canvas(self):
         logger.debug("DrawingCanvas.clear_canvas")
-        self.image.fill(self.bg_color.rgb())
+        self.image.fill(QColor(0, 0, 0, 0))
         self.update()
 
     def set_background_image(self, file_path):
@@ -501,8 +602,8 @@ class DrawingCanvas(QWidget):
             pm = QPixmap(file_path)
             if not pm.isNull():
                 scaled = pm.scaled(self.native_width, self.native_height,
-                                   Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
-                self.bg_image = scaled.toImage().convertToFormat(QImage.Format_ARGB32)
+                                   Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                self.bg_image = scaled.toImage().convertToFormat(QImage.Format.Format_ARGB32)
                 self.bg_image_path = file_path
                 self.update()
         else:
@@ -516,96 +617,17 @@ class DrawingCanvas(QWidget):
         self.bg_image_path = None
         self.update()
 
-    def _save_state(self):
-        state = {
-            'image': self.image.copy(),
-            'bg_image': self.bg_image.copy() if self.bg_image else None,
-            'bg_image_path': self.bg_image_path,
-            'images': [],
-            'texts': [],
-            'browser_sources': [],
-        }
-        for img in self.images:
-            state['images'].append({
-                'x': img.x, 'y': img.y, 'scale': img.scale,
-                'path': getattr(img, '_source_path', None),
-                'selected': img.selected,
-            })
-        for txt in self.texts:
-            state['texts'].append({
-                'text': txt.text, 'x': txt.x, 'y': txt.y,
-                'font_family': txt.font_family, 'font_size': txt.font_size,
-                'color': QColor(txt.color), 'selected': txt.selected,
-            })
-        for bs in self.browser_sources:
-            state['browser_sources'].append({
-                'url': bs.url, 'x': bs.x, 'y': bs.y,
-                'width': bs.width, 'height': bs.height,
-                'enabled': bs.enabled, 'selected': bs.selected,
-            })
-        self._undo_stack.append(state)
-        if len(self._undo_stack) > self._max_undo:
-            self._undo_stack.pop(0)
-        self._redo_stack.clear()
-        logger.debug("DrawingCanvas._save_state: undo stack size=%d", len(self._undo_stack))
-
-    def _restore_state(self, state):
-        self.image = state['image'].copy()
-        self.bg_image = state['bg_image'].copy() if state['bg_image'] else None
-        self.bg_image_path = state['bg_image_path']
-        self.images = []
-        for img_data in state['images']:
-            if img_data['path'] and os.path.exists(img_data['path']):
-                pm = QPixmap(img_data['path'])
-                if not pm.isNull():
-                    img = DraggableImage(pm, img_data['x'], img_data['y'], img_data['scale'])
-                    img._source_path = img_data['path']
-                    img.selected = img_data['selected']
-                    self.images.append(img)
-        for txt_data in state['texts']:
-            txt = DraggableText(txt_data['text'], txt_data['x'], txt_data['y'],
-                               txt_data['font_family'], txt_data['font_size'], txt_data['color'])
-            txt.selected = txt_data['selected']
-            self.texts.append(txt)
-        self.browser_sources = []
-        for bs_data in state['browser_sources']:
-            bs = BrowserSource(bs_data['url'], bs_data['x'], bs_data['y'],
-                              bs_data['width'], bs_data['height'])
-            bs.enabled = bs_data['enabled']
-            bs.selected = bs_data['selected']
-            self.browser_sources.append(bs)
-        self.selected_item = None
-        self.update()
-
     def undo(self):
-        if len(self._undo_stack) <= 1:
-            return
-        current = self._undo_stack.pop()
-        self._redo_stack.append(current)
-        self._restore_state(self._undo_stack[-1])
-        logger.debug("DrawingCanvas.undo: stack size=%d", len(self._undo_stack))
+        self.undo_stack.undo()
 
     def redo(self):
-        if not self._redo_stack:
-            return
-        state = self._redo_stack.pop()
-        self._undo_stack.append(state)
-        self._restore_state(state)
-        logger.debug("DrawingCanvas.redo: stack size=%d", len(self._undo_stack))
-
-    def begin_action(self):
-        self._action_in_progress = True
-
-    def end_action(self):
-        if self._action_in_progress:
-            self._action_in_progress = False
-            self._save_state()
+        self.undo_stack.redo()
 
     def get_frame_bytes(self):
-        temp_image = QImage(self.native_width, self.native_height, QImage.Format_ARGB32)
+        temp_image = QImage(self.native_width, self.native_height, QImage.Format.Format_ARGB32)
         painter = QPainter(temp_image)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setRenderHint(QPainter.TextAntialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
         if self.bg_image:
             painter.drawImage(0, 0, self.bg_image)
@@ -620,13 +642,13 @@ class DrawingCanvas(QWidget):
 
         painter.end()
 
-        bits = temp_image.bits()
-        bits.setsize(temp_image.byteCount())
-        return bytes(bits)
+        ptr = int(temp_image.constBits())
+        size = temp_image.sizeInBytes()
+        return (ctypes.c_char * size).from_address(ptr)[:]
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         painter.fillRect(self.rect(), QColor(20, 20, 30))
 
@@ -639,8 +661,6 @@ class DrawingCanvas(QWidget):
         painter.translate(offset_x, offset_y)
         painter.scale(scale, scale)
 
-        if self.bg_image:
-            painter.drawImage(0, 0, self.bg_image)
         painter.drawImage(0, 0, self.image)
 
         for bs in self.browser_sources:
@@ -651,7 +671,7 @@ class DrawingCanvas(QWidget):
             txt.draw(painter)
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             native_pos = self.display_to_native(event.pos())
             logger.debug("DrawingCanvas.mousePressEvent: display=%s native=%s", event.pos(), native_pos)
 
@@ -722,6 +742,7 @@ class DrawingCanvas(QWidget):
                 self.update()
 
             self.drawing = True
+            self._drawing_start_image = self.image.copy()
             self.last_point = native_pos
             logger.debug("DrawingCanvas.mousePressEvent: drawing mode started")
 
@@ -774,12 +795,13 @@ class DrawingCanvas(QWidget):
 
         if self.drawing:
             painter = QPainter(self.image)
-            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
             if self.eraser:
-                pen = QPen(self.bg_color, self.brush_size * 2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+                pen = QPen(QColor(0, 0, 0, 0), self.brush_size * 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+                painter.setCompositionMode(QPainter.CompositionMode_Clear)
             else:
-                pen = QPen(self.brush_color, self.brush_size, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+                pen = QPen(self.brush_color, self.brush_size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
 
             painter.setPen(pen)
             painter.drawLine(self.last_point, native_pos)
@@ -789,8 +811,14 @@ class DrawingCanvas(QWidget):
             self.update()
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             logger.debug("DrawingCanvas.mouseReleaseEvent: drawing=%s selected=%s", self.drawing, self.selected_item)
+            
+            if self.drawing and hasattr(self, '_drawing_start_image'):
+                cmd = DrawStrokeCommand(self, self._drawing_start_image)
+                self.undo_stack.push(cmd)
+                del self._drawing_start_image
+            
             self.drawing = False
             if self.selected_item:
                 self.selected_item.dragging = False
@@ -811,13 +839,13 @@ class DrawingCanvas(QWidget):
                     logger.info("DrawingCanvas.dropEvent: dropping image %s", file_path)
                     self.add_image(file_path)
 
-    def add_image(self, file_path):
+    def add_image(self, file_path, notify=True):
         logger.debug("DrawingCanvas.add_image: %s", file_path)
         pixmap = QPixmap(file_path)
         if not pixmap.isNull():
             max_width = self.native_width // 3
             if pixmap.width() > max_width:
-                pixmap = pixmap.scaledToWidth(max_width, Qt.SmoothTransformation)
+                pixmap = pixmap.scaledToWidth(max_width, Qt.TransformationMode.SmoothTransformation)
 
             x = (self.native_width - pixmap.width()) // 2
             y = (self.native_height - pixmap.height()) // 2
@@ -826,15 +854,23 @@ class DrawingCanvas(QWidget):
             img._source_path = file_path
             self.images.append(img)
             self.update()
+            
+            if notify:
+                self.undo_stack.push(AddImageCommand(self, file_path, img))
+            
             logger.info("DrawingCanvas.add_image: added image at (%d,%d) size=%dx%d", x, y, pixmap.width(), pixmap.height())
 
-    def add_text(self, text, font_family="Arial", font_size=48, color=QColor(255, 255, 255)):
+    def add_text(self, text, font_family="Arial", font_size=48, color=QColor(255, 255, 255), notify=True):
         x = self.native_width // 4
         y = self.native_height // 2
         txt = DraggableText(text, x, y, font_family, font_size, color)
         txt._list_index = len(self.texts)
         self.texts.append(txt)
         self.update()
+        
+        if notify:
+            self.undo_stack.push(AddTextCommand(self, text, font_family, font_size, color, txt))
+        
         logger.info("DrawingCanvas.add_text: added '%s' at (%d,%d)", text, x, y)
 
     def edit_text(self, list_index, text, font_family, font_size, color):
@@ -848,9 +884,8 @@ class DrawingCanvas(QWidget):
             logger.info("DrawingCanvas.edit_text: updated text '%s'", text)
 
     def add_browser_source(self, url):
-        bs = BrowserSource(url, 100, 100, self.native_width // 2, self.native_height // 2)
+        bs = LiveBrowserSource(url, 100, 100, self.native_width // 2, self.native_height // 2)
         self.browser_sources.append(bs)
-        bs.fetch_snapshot()
         self.update()
         logger.info("DrawingCanvas.add_browser_source: added %s", url)
 
@@ -863,26 +898,21 @@ class DrawingCanvas(QWidget):
         elif item_type == 'text':
             self.texts = [t for t in self.texts if t.text != identifier]
         elif item_type == 'browser':
-            self.browser_sources = [bs for bs in self.browser_sources if bs.url != identifier]
+            for bs in self.browser_sources:
+                if bs.url == identifier:
+                    bs.stop()
+                    self.browser_sources.remove(bs)
         self.update()
         logger.debug("DrawingCanvas.remove_item: type=%s identifier=%s", item_type, identifier)
 
     def refresh_browser_sources(self):
-        for bs in self.browser_sources:
-            if bs.enabled and time.time() - bs._last_fetch > 5:
-                bs.fetch_snapshot()
-        self.update()
+        pass
 
 class SettingsPanel(QWidget):
     stream_start_requested = pyqtSignal(dict)
     stream_stop_requested = pyqtSignal()
-    clear_canvas_requested = pyqtSignal()
-    import_image_requested = pyqtSignal()
-    add_text_requested = pyqtSignal()
-    choose_bg_color_requested = pyqtSignal()
+    add_text_to_canvas = pyqtSignal(str, str, int, object)
     choose_brush_color_requested = pyqtSignal()
-    set_bg_image_requested = pyqtSignal()
-    remove_bg_image_requested = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -894,66 +924,19 @@ class SettingsPanel(QWidget):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         scroll_widget = QWidget()
         scroll_layout = QVBoxLayout(scroll_widget)
         scroll_layout.setSpacing(12)
 
-        scroll_layout.addWidget(self.create_canvas_group())
         scroll_layout.addWidget(self.create_drawing_tools_group())
-        scroll_layout.addWidget(self.create_media_group())
         scroll_layout.addWidget(self.create_stream_settings_group())
         scroll_layout.addWidget(self.create_stream_status_group())
         scroll_layout.addStretch()
 
         scroll.setWidget(scroll_widget)
         main_layout.addWidget(scroll)
-
-    def create_canvas_group(self):
-        group = QGroupBox("Canvas")
-        layout = QVBoxLayout(group)
-
-        res_layout = QHBoxLayout()
-        res_label = QLabel("Resolution:")
-        self.resolution_combo = QComboBox()
-        self.resolution_combo.addItems(["1920x1080 (1080p)", "1280x720 (720p)"])
-        res_layout.addWidget(res_label)
-        res_layout.addWidget(self.resolution_combo)
-        layout.addLayout(res_layout)
-
-        bg_layout = QHBoxLayout()
-        bg_label = QLabel("Background:")
-        self.bg_color_btn = QPushButton()
-        self.bg_color_btn.setFixedSize(40, 30)
-        self.bg_color_btn.setStyleSheet("background-color: rgb(30, 30, 30); border: 1px solid #ccc;")
-        self.bg_color_btn.clicked.connect(self.choose_bg_color_requested.emit)
-        bg_layout.addWidget(bg_label)
-        bg_layout.addWidget(self.bg_color_btn)
-        bg_layout.addStretch()
-        layout.addLayout(bg_layout)
-
-        bg_img_layout = QVBoxLayout()
-        bg_img_label = QLabel("Background Image:")
-        bg_img_layout.addWidget(bg_img_label)
-
-        bg_img_btn_layout = QHBoxLayout()
-        self.set_bg_image_btn = QPushButton("Set Image")
-        self.set_bg_image_btn.clicked.connect(self.set_bg_image_requested.emit)
-        self.remove_bg_image_btn = QPushButton("Remove")
-        self.remove_bg_image_btn.clicked.connect(self.remove_bg_image_requested.emit)
-        bg_img_btn_layout.addWidget(self.set_bg_image_btn)
-        bg_img_btn_layout.addWidget(self.remove_bg_image_btn)
-        bg_img_layout.addLayout(bg_img_btn_layout)
-
-        self.bg_image_label = QLabel("No image set")
-        self.bg_image_label.setStyleSheet("color: #6c7086; font-size: 11px;")
-        self.bg_image_label.setWordWrap(True)
-        bg_img_layout.addWidget(self.bg_image_label)
-
-        layout.addLayout(bg_img_layout)
-
-        return group
 
     def create_drawing_tools_group(self):
         group = QGroupBox("Drawing Tools")
@@ -972,7 +955,7 @@ class SettingsPanel(QWidget):
 
         brush_size_layout = QHBoxLayout()
         brush_size_label = QLabel("Brush Size:")
-        self.brush_size_slider = QSlider(Qt.Horizontal)
+        self.brush_size_slider = QSlider(Qt.Orientation.Horizontal)
         self.brush_size_slider.setMinimum(1)
         self.brush_size_slider.setMaximum(50)
         self.brush_size_slider.setValue(5)
@@ -988,24 +971,6 @@ class SettingsPanel(QWidget):
         self.eraser_btn = QPushButton("Eraser")
         self.eraser_btn.setCheckable(True)
         layout.addWidget(self.eraser_btn)
-
-        clear_btn = QPushButton("Clear Canvas")
-        clear_btn.clicked.connect(self.clear_canvas_requested.emit)
-        layout.addWidget(clear_btn)
-
-        return group
-
-    def create_media_group(self):
-        group = QGroupBox("Media")
-        layout = QVBoxLayout(group)
-
-        import_btn = QPushButton("Import Image")
-        import_btn.clicked.connect(self.import_image_requested.emit)
-        layout.addWidget(import_btn)
-
-        add_text_btn = QPushButton("Add Text")
-        add_text_btn.clicked.connect(self.add_text_requested.emit)
-        layout.addWidget(add_text_btn)
 
         return group
 
@@ -1042,7 +1007,7 @@ class SettingsPanel(QWidget):
         key_layout = QVBoxLayout()
         key_label = QLabel("Stream Key:")
         self.stream_key_input = QLineEdit()
-        self.stream_key_input.setEchoMode(QLineEdit.Password)
+        self.stream_key_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.stream_key_input.setPlaceholderText("Enter your stream key")
         key_layout.addWidget(key_label)
         key_layout.addWidget(self.stream_key_input)
@@ -1072,7 +1037,7 @@ class SettingsPanel(QWidget):
         self.show_key_btn.setCheckable(True)
         self.show_key_btn.toggled.connect(
             lambda checked: self.stream_key_input.setEchoMode(
-                QLineEdit.Normal if checked else QLineEdit.Password
+                QLineEdit.Normal if checked else QLineEdit.EchoMode.Password
             )
         )
         layout.addWidget(self.show_key_btn)
@@ -1175,7 +1140,7 @@ class SettingsPanel(QWidget):
 
 class TextDialog(QWidget):
     def __init__(self, parent=None):
-        super().__init__(parent, Qt.Dialog)
+        super().__init__(parent, Qt.WindowType.Dialog)
         self.setWindowTitle("Add Text")
         self.setFixedSize(350, 250)
         self.result = None
@@ -1266,21 +1231,97 @@ class TextDialog(QWidget):
             self._dialog_loop.quit()
         super().reject()
 
-class BrowserSource:
-    def __init__(self, url, x=0, y=0, width=1920, height=1080):
+class LiveBrowserSource:
+    def __init__(self, url, x=0, y=0, width=960, height=540, fps=15):
         self.url = url
         self.x = x
         self.y = y
         self.width = width
         self.height = height
+        self.fps = fps
         self.enabled = True
         self.selected = False
         self.dragging = False
         self.drag_offset_x = 0
         self.drag_offset_y = 0
-        self._pixmap = None
-        self._last_fetch = 0
-        logger.debug("BrowserSource.__init__: url=%s size=%dx%d", url, width, height)
+        self._last_capture = 0
+        self._capture_interval = int(1000 / fps)
+        self._frame = QImage(width, height, QImage.Format.Format_ARGB32)
+        self._frame.fill(QColor(0, 0, 0, 0))
+        self._loaded = False
+        self._load_failed = False
+        self._loading = False
+
+        self._scene = QGraphicsScene(0, 0, width, height)
+        self._scene.setBackgroundBrush(QBrush(QColor(0, 0, 0, 0)))
+        self._view = QGraphicsView(self._scene)
+        self._view.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        self._view.setStyleSheet("background: transparent;")
+        self._view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._view.setFrameShape(QGraphicsView.Shape.NoFrame)
+        self._view.resize(width, height)
+
+        self._web_view = QWebEngineView()
+        self._web_view.setStyleSheet("background: transparent;")
+        self._web_view.resize(width, height)
+        self._scene.addWidget(self._web_view)
+        self._web_view.page().settings().setAttribute(QWebEngineSettings.WebAttribute.ShowScrollBars, False)
+
+        self._web_view.loadFinished.connect(self._on_load_finished)
+        self._web_view.loadStarted.connect(self._on_load_started)
+        self._web_view.loadFinished.connect(self._apply_transparent_bg)
+        self._web_view.load(QUrl(url))
+        logger.debug("LiveBrowserSource.__init__: url=%s size=%dx%d fps=%d", url, width, height, fps)
+
+    def _apply_transparent_bg(self, ok=True):
+        if ok:
+            self._web_view.page().runJavaScript(
+                "document.body.style.setProperty('background-color', 'transparent', 'important'); "
+                "document.body.style.setProperty('margin', '0', 'important'); "
+                "document.body.style.setProperty('padding', '0', 'important');")
+            self._web_view.page().runJavaScript(
+                "document.documentElement.style.setProperty('background-color', 'transparent', 'important');")
+
+    def _on_load_started(self):
+        self._loading = True
+        self._load_failed = False
+
+    def _on_load_finished(self, ok):
+        self._loading = False
+        if ok:
+            self._loaded = True
+            self._apply_transparent_bg()
+            self._capture_frame()
+            logger.info("LiveBrowserSource._on_load_finished: loaded %s", self.url)
+        else:
+            self._load_failed = True
+            logger.warning("LiveBrowserSource._on_load_finished: failed for %s", self.url)
+
+    def _capture_frame(self):
+        if not self._loaded or self._load_failed:
+            return
+        now = int(time.time() * 1000)
+        if now - self._last_capture < self._capture_interval:
+            return
+        self._last_capture = now
+        self._frame.fill(QColor(0, 0, 0, 0))
+        painter = QPainter(self._frame)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        self._web_view.render(painter)
+        painter.end()
+        
+        _debug_dir = os.path.join(os.path.dirname(__file__), "logs")
+        _debug_path = os.path.join(_debug_dir, "browser_capture.png")
+        if os.path.exists(_debug_dir):
+            self._frame.save(_debug_path)
+            logger.debug("LiveBrowserSource._capture_frame: saved debug frame to %s", _debug_path)
+
+    def stop(self):
+        self._web_view.stop()
+        self._web_view.deleteLater()
+        self._view.deleteLater()
+        self._scene.deleteLater()
 
     def get_rect(self):
         return QRect(self.x, self.y, self.width, self.height)
@@ -1288,40 +1329,32 @@ class BrowserSource:
     def contains(self, pos):
         return self.get_rect().contains(pos)
 
-    def fetch_snapshot(self):
-        try:
-            from PIL import Image
-            import io
-            import urllib.request
-            req = urllib.request.Request(self.url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                data = resp.read()
-                img = Image.open(io.BytesIO(data))
-                img = img.convert('RGBA')
-                img = img.resize((self.width, self.height), Image.LANCZOS)
-                self._pixmap = QPixmap.fromImage(
-                    QImage(img.tobytes(), img.width, img.height, img.width * 4, QImage.Format_RGBA8888)
-                )
-                self._last_fetch = time.time()
-                logger.debug("BrowserSource.fetch_snapshot: fetched %s", self.url)
-        except Exception as e:
-            logger.warning("BrowserSource.fetch_snapshot: failed for %s: %s", self.url, e)
-            self._pixmap = None
-
     def draw(self, painter):
         if not self.enabled:
             return
-        if self._pixmap:
-            painter.drawPixmap(self.x, self.y, self._pixmap)
-        else:
+        if self._load_failed:
             painter.fillRect(self.get_rect(), QColor(40, 40, 60))
             painter.setPen(QColor(150, 150, 180))
             font = QFont("Arial", 14)
             painter.setFont(font)
-            painter.drawText(self.get_rect(), Qt.AlignCenter, "Browser Source\n" + self.url[:50])
-
+            painter.drawText(self.get_rect(), Qt.AlignmentFlag.AlignCenter,
+                             f"Failed: {self.url[:50]}")
+            logger.debug("LiveBrowserSource.draw: %s FAILED", self.url)
+        elif not self._loaded:
+            painter.fillRect(self.get_rect(), QColor(30, 30, 50))
+            painter.setPen(QColor(150, 150, 180))
+            font = QFont("Arial", 14)
+            painter.setFont(font)
+            status = "Loading..." if self._loading else "Initializing..."
+            painter.drawText(self.get_rect(), Qt.AlignmentFlag.AlignCenter,
+                             f"{status}\n{self.url[:50]}")
+            logger.debug("LiveBrowserSource.draw: %s NOT loaded (loading=%s)", self.url, self._loading)
+        else:
+            self._capture_frame()
+            painter.drawImage(self.x, self.y, self._frame)
+            logger.debug("LiveBrowserSource.draw: %s rendered frame", self.url)
         if self.selected:
-            painter.setPen(QPen(QColor(0, 120, 215), 2, Qt.DashLine))
+            painter.setPen(QPen(QColor(0, 120, 215), 2, Qt.PenStyle.DashLine))
             painter.drawRect(self.get_rect())
 
 class ResourcesPanel(QWidget):
@@ -1408,6 +1441,7 @@ class ResourcesPanel(QWidget):
             self.items.append(item_data)
             self.list_widget.addItem(f"🌐 {name}")
             logger.info("ResourcesPanel.add_browser_source: %s", url.strip())
+            self.browser_source_selected.emit(url.strip())
 
     def on_item_double_click(self, item):
         idx = self.list_widget.row(item)
@@ -1494,23 +1528,21 @@ class MainWindow(QMainWindow):
         # Center: Canvas + logs
         center_split = QVBoxLayout()
 
-        canvas_container = QWidget()
-        canvas_container.setStyleSheet("background-color: #141420;")
-        canvas_layout = QVBoxLayout(canvas_container)
-        canvas_layout.setContentsMargins(10, 10, 10, 10)
-
         toolbar = QHBoxLayout()
         toolbar.setContentsMargins(0, 0, 0, 5)
         self.undo_btn = QPushButton("↩ Undo")
         self.undo_btn.setFixedSize(90, 30)
-        self.undo_btn.clicked.connect(self.canvas.undo)
         self.redo_btn = QPushButton("↪ Redo")
         self.redo_btn.setFixedSize(90, 30)
-        self.redo_btn.clicked.connect(self.canvas.redo)
         toolbar.addStretch()
         toolbar.addWidget(self.undo_btn)
         toolbar.addWidget(self.redo_btn)
-        canvas_layout.addLayout(toolbar)
+        center_split.addLayout(toolbar)
+
+        canvas_container = QWidget()
+        canvas_container.setStyleSheet("background-color: #1a1a2e; border: 1px solid gold; padding: 1px;")
+        canvas_layout = QVBoxLayout(canvas_container)
+        canvas_layout.setContentsMargins(10, 10, 10, 10)
 
         self.canvas = DrawingCanvas(self.canvas_width, self.canvas_height)
         canvas_layout.addWidget(self.canvas)
@@ -1550,17 +1582,6 @@ class MainWindow(QMainWindow):
         logger.debug("MainWindow.connect_signals")
         self.settings_panel.stream_start_requested.connect(self.start_stream)
         self.settings_panel.stream_stop_requested.connect(self.stop_stream)
-        self.settings_panel.clear_canvas_requested.connect(self.canvas.clear_canvas)
-        self.settings_panel.import_image_requested.connect(self.import_image)
-        self.settings_panel.add_text_requested.connect(self.show_text_dialog)
-        self.settings_panel.brush_size_slider.valueChanged.connect(
-            lambda v: setattr(self.canvas, 'brush_size', v) or self.config.set("brush_size", v)
-        )
-        self.settings_panel.eraser_btn.toggled.connect(
-            lambda checked: setattr(self.canvas, 'eraser', checked)
-        )
-        self.settings_panel.resolution_combo.currentTextChanged.connect(self.change_resolution)
-        self.settings_panel.choose_bg_color_requested.connect(self.change_bg_color)
         self.settings_panel.choose_brush_color_requested.connect(self.change_brush_color)
         self.settings_panel.encoder_combo.currentTextChanged.connect(
             lambda t: self.config.set("encoder", t)
@@ -1580,8 +1601,6 @@ class MainWindow(QMainWindow):
         self.settings_panel.fps_combo.currentTextChanged.connect(
             lambda t: self.config.set("fps", t)
         )
-        self.settings_panel.set_bg_image_requested.connect(self.set_background_image)
-        self.settings_panel.remove_bg_image_requested.connect(self.remove_background_image)
         self.resources_panel.add_image_to_canvas.connect(self.canvas.add_image)
         self.resources_panel.add_text_to_canvas.connect(self.canvas.add_text)
         self.resources_panel.edit_text_on_canvas.connect(self.canvas.edit_text)
@@ -1590,17 +1609,16 @@ class MainWindow(QMainWindow):
 
     def load_config(self):
         logger.debug("MainWindow.load_config")
+        
+        bg_img_path = self.config.get("bg_image_path", "")
+        if not bg_img_path or not os.path.exists(bg_img_path):
+            logger.error("MainWindow.load_config: No valid background image found. Exiting.")
+            QMessageBox.critical(self, "Error", "No valid background image found. Please set a valid 1920x1080 background image in data.json (bg_image_path).")
+            sys.exit(1)
+        
+        self.canvas.set_background_image(bg_img_path)
         res = self.config.get("resolution", "1920x1080 (1080p)")
-        idx = self.settings_panel.resolution_combo.findText(res)
-        if idx >= 0:
-            self.settings_panel.resolution_combo.setCurrentIndex(idx)
         self.change_resolution(res)
-
-        bg = self.config.get("bg_color", [30, 30, 30])
-        self.canvas.bg_color = QColor(*bg)
-        self.settings_panel.bg_color_btn.setStyleSheet(
-            f"background-color: rgb({bg[0]}, {bg[1]}, {bg[2]}); border: 1px solid #ccc;"
-        )
 
         bc = self.config.get("brush_color", [255, 255, 255])
         self.canvas.brush_color = QColor(*bc)
@@ -1634,7 +1652,6 @@ class MainWindow(QMainWindow):
         bg_img_path = self.config.get("bg_image_path", "")
         if bg_img_path and os.path.exists(bg_img_path):
             self.canvas.set_background_image(bg_img_path)
-            self.settings_panel.bg_image_label.setText(os.path.basename(bg_img_path))
 
         logger.info("MainWindow.load_config: loaded resolution=%s encoder=%s platform=%s bitrate=%d fps=%s",
                     res, enc, plat, self.config.get("bitrate", 4000), fps)
@@ -1652,8 +1669,8 @@ class MainWindow(QMainWindow):
         old_image = self.canvas.image
         self.canvas.native_width = self.canvas_width
         self.canvas.native_height = self.canvas_height
-        self.canvas.image = QImage(self.canvas_width, self.canvas_height, QImage.Format_ARGB32)
-        self.canvas.image.fill(self.canvas.bg_color.rgb())
+        self.canvas.image = QImage(self.canvas_width, self.canvas_height, QImage.Format.Format_ARGB32)
+        self.canvas.image.fill(QColor(0, 0, 0, 0))
 
         painter = QPainter(self.canvas.image)
         painter.drawImage(0, 0, old_image)
@@ -1665,17 +1682,6 @@ class MainWindow(QMainWindow):
         self.canvas.update()
         logger.info("MainWindow.change_resolution: canvas now %dx%d", self.canvas_width, self.canvas_height)
 
-    def change_bg_color(self):
-        color = QColorDialog.getColor(self.canvas.bg_color, self, "Choose Background Color")
-        if color.isValid():
-            logger.info("MainWindow.change_bg_color: rgb(%d,%d,%d)", color.red(), color.green(), color.blue())
-            self.canvas.bg_color = color
-            self.settings_panel.bg_color_btn.setStyleSheet(
-                f"background-color: rgb({color.red()}, {color.green()}, {color.blue()}); border: 1px solid #ccc;"
-            )
-            self.config.set("bg_color", [color.red(), color.green(), color.blue()])
-            self.canvas.clear_canvas()
-
     def change_brush_color(self):
         color = QColorDialog.getColor(self.canvas.brush_color, self, "Choose Brush Color")
         if color.isValid():
@@ -1685,42 +1691,6 @@ class MainWindow(QMainWindow):
                 f"background-color: rgb({color.red()}, {color.green()}, {color.blue()}); border: 1px solid #ccc;"
             )
             self.config.set("brush_color", [color.red(), color.green(), color.blue()])
-
-    def import_image(self):
-        logger.debug("MainWindow.import_image: opening file dialog")
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Import Image",
-            "",
-            "Images (*.png *.jpg *.jpeg *.gif *.bmp *.webp)"
-        )
-        if file_path:
-            logger.info("MainWindow.import_image: selected %s", file_path)
-            self.canvas.add_image(file_path)
-        else:
-            logger.debug("MainWindow.import_image: cancelled")
-
-    def set_background_image(self):
-        logger.debug("MainWindow.set_background_image: opening file dialog")
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Set Background Image",
-            "",
-            "Images (*.png *.jpg *.jpeg *.gif *.bmp *.webp)"
-        )
-        if file_path:
-            logger.info("MainWindow.set_background_image: selected %s", file_path)
-            self.canvas.set_background_image(file_path)
-            self.config.set("bg_image_path", file_path)
-            self.settings_panel.bg_image_label.setText(os.path.basename(file_path))
-        else:
-            logger.debug("MainWindow.set_background_image: cancelled")
-
-    def remove_background_image(self):
-        logger.debug("MainWindow.remove_background_image")
-        self.canvas.remove_background_image()
-        self.config.set("bg_image_path", "")
-        self.settings_panel.bg_image_label.setText("No image set")
 
     def show_text_dialog(self):
         logger.debug("MainWindow.show_text_dialog")
@@ -1771,19 +1741,25 @@ class MainWindow(QMainWindow):
 
     def stop_stream(self):
         logger.info("MainWindow.stop_stream")
-        if self.stream_thread:
-            self.stream_thread.stop()
-            self.stream_thread.wait()
-            self.stream_thread = None
-
         self.timer.stop()
         self.duration_timer.stop()
+        if self.stream_thread is not None:
+            if self.stream_thread.isRunning():
+                self.stream_thread.stop()
+                if self.stream_thread.wait(5000):
+                    self.stream_thread = None
+                    logger.info("MainWindow.stop_stream: thread joined")
+                else:
+                    logger.warning("MainWindow.stop_stream: wait timeout, thread still running")
+                    self.stream_thread = None
+            else:
+                self.stream_thread = None
+
         self.settings_panel.set_streaming(False)
         self.stream_start_time = None
-        logger.info("MainWindow.stop_stream: thread joined, timers stopped")
 
     def update_stream_frame(self):
-        if self.stream_thread and self.stream_thread.isRunning():
+        if self.stream_thread is not None and self.stream_thread.isRunning():
             frame_bytes = self.canvas.get_frame_bytes()
             self.stream_thread.set_frame(frame_bytes)
 
@@ -1809,7 +1785,7 @@ class MainWindow(QMainWindow):
 
     def on_ffmpeg_log(self, message):
         cursor = self.ffmpeg_log_text.textCursor()
-        cursor.movePosition(QTextCursor.End)
+        cursor.movePosition(QTextCursor.MoveOperation.End)
         cursor.insertText(message + "\n")
         self.ffmpeg_log_text.setTextCursor(cursor)
         self.ffmpeg_log_text.ensureCursorVisible()
@@ -1837,7 +1813,7 @@ def main():
     window.show()
 
     logger.info("main: main window shown, entering event loop")
-    ret = app.exec_()
+    ret = app.exec()
     logger.info("main: event loop exited with code %d", ret)
     sys.exit(ret)
 

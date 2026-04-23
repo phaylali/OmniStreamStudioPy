@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+* { margin: 0; padding: 0; }
+html, body { width: 100%; height: 100%; background: transparent; overflow: hidden; }
+.container { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+.red-box { width: 200px; height: 100px; background: #e94560; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-family: Arial; font-size: 24px; color: white; font-weight: bold; }
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.spinner { width: 40px; height: 40px; border: 5px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 1s linear infinite; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="red-box">
+    <div class="spinner"></div>
+    &nbsp;OmniStream
+  </div>
+</div>
+</body>
+</html>
